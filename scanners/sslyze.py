@@ -14,6 +14,7 @@
 
 import logging
 import datetime
+import time
 from typing import Any
 
 from sslyze.server_connectivity_tester import ServerConnectivityTester, ServerConnectivityError
@@ -319,10 +320,10 @@ def run_sslyze(data, environment, options):
     else:
         sslv2, sslv3, tlsv1, tlsv1_1, tlsv1_2, tlsv1_3, certs, reneg = scan_parallel(scanner, server_info, data, options)
 
-    # Only analyze protocols if all the scanners functioned.
-    # Very difficult to draw conclusions if some worked and some did not.
-    if sslv2 and sslv3 and tlsv1 and tlsv1_1 and tlsv1_2 and tlsv1_3:
-        analyze_protocols_and_ciphers(data, sslv2, sslv3, tlsv1, tlsv1_1, tlsv1_2, tlsv1_3)
+    # Analyze protocols if all the scanners functioned.
+    # Very difficult to draw conclusions if some worked and some did not, but try to be as fault tolerant as possible.
+    #if sslv2 and sslv3 and tlsv1 and tlsv1_1 and tlsv1_2 and tlsv1_3:
+    analyze_protocols_and_ciphers(data, sslv2, sslv3, tlsv1, tlsv1_1, tlsv1_2, tlsv1_3)
 
     if certs:
         data['certs'] = analyze_certs(certs)
@@ -343,14 +344,19 @@ def analyze_protocols_and_ciphers(data, sslv2, sslv3, tlsv1, tlsv1_1, tlsv1_2, t
         'tlsv1.3': supported_protocol(tlsv1_3)
     }
 
-    accepted_ciphers = (
-        (sslv2.accepted_cipher_list or []) +
-        (sslv3.accepted_cipher_list or []) +
-        (tlsv1.accepted_cipher_list or []) +
-        (tlsv1_1.accepted_cipher_list or []) +
-        (tlsv1_2.accepted_cipher_list or []) +
-        (tlsv1_3.accepted_cipher_list or [])
-    )
+    accepted_ciphers = []
+    if sslv2:
+        accepted_ciphers += (sslv2.accepted_cipher_list or [])
+    if sslv3:
+        accepted_ciphers += (sslv3.accepted_cipher_list or [])
+    if tlsv1:
+        accepted_ciphers += (tlsv1.accepted_cipher_list or [])
+    if tlsv1_1:
+        accepted_ciphers += (tlsv1_1.accepted_cipher_list or [])
+    if tlsv1_2:
+        accepted_ciphers += (tlsv1_2.accepted_cipher_list or [])
+    if tlsv1_3:
+        accepted_ciphers += (tlsv1_3.accepted_cipher_list or [])
     data['ciphers'] = [cipher.name for cipher in accepted_ciphers]
 
     if len(accepted_ciphers) > 0:
@@ -579,6 +585,8 @@ def analyze_reneg(data, reneg):
 
 # Given CipherSuiteScanResult, whether the protocol is supported
 def supported_protocol(result):
+    if result is None:
+        return None
     return (len(result.accepted_cipher_list) > 0)
 
 
@@ -599,11 +607,24 @@ def init_sslyze(hostname, port, starttls_smtp, options, sync=False):
         server_tester = ServerConnectivityTester(hostname=hostname, port=port, tls_wrapped_protocol=tls_wrapped_protocol)
         server_info = server_tester.perform(network_timeout=network_timeout)
     except ServerConnectivityError:
-        logging.warning("\tServer connectivity not established during test.")
-        return None, None
+        # Usually pshtt has already established that we can connect to the site, so let's try again a couple of times
+        try:
+            logging.debug("\t{}:{} Server connectivity check failed. Trying again...".format(hostname, port))
+            time.sleep(10)
+            server_tester = ServerConnectivityTester(hostname=hostname, port=port, tls_wrapped_protocol=tls_wrapped_protocol)
+            server_info = server_tester.perform(network_timeout=(network_timeout*2))
+        except Exception as err:
+            try:
+                logging.debug("\t{}:{} Server connectivity check failed. Trying again...".format(hostname, port))
+                time.sleep(30)
+                server_tester = ServerConnectivityTester(hostname=hostname, port=port, tls_wrapped_protocol=tls_wrapped_protocol)
+                server_info = server_tester.perform(network_timeout=(network_timeout*2))
+            except Exception as err:
+                logging.warning("\t{}:{} Server connectivity not established during test.".format(hostname, port))
+                return None, None
     except Exception as err:
         utils.notify(err)
-        logging.warning("\tUnknown exception when performing server connectivity info.")
+        logging.warning("\t{}:{} Unknown exception when performing server connectivity info.".format(hostname, port))
         return None, None
 
     if sync:
@@ -619,20 +640,35 @@ def init_sslyze(hostname, port, starttls_smtp, options, sync=False):
 def scan_serial(scanner, server_info, data, options):
     errors = 0
 
-    def run_scan(scan_type, command, errors):
+    def run_scan(scan_type, command, errors, retry=True):
         if(errors >= 2):
+            logging.warning("{}: Too many errors, aborting rest of scans.".format(server_info.hostname))
             return None, errors
-        logging.debug("\t\t{} scan.".format(scan_type))
+        logging.debug("\t\t{} {} scan.".format(server_info.hostname, scan_type))
         result = None
         try:
             result = scanner.run_scan_command(server_info, command)
         except Exception as err:
-            logging.warning("{}: Error during {} scan.".format(server_info.hostname, scan_type))
-            logging.debug("{}: Exception during {} scan: {}".format(server_info.hostname, scan_type, err))
-            errors = errors + 1
+            if retry and "timed out" in str(err):
+                logging.debug("\t\t{}: Timed out during {} scan.  Trying one more time...".format(server_info.hostname, scan_type))
+                time.sleep(10)
+                try:
+                    result = scanner.run_scan_command(server_info, command)
+                except Exception as err2:
+                    if retry and "timed out" in str(err2):
+                        logging.debug("\t\t{}: Timed out during {} scan.  Trying one more time...".format(server_info.hostname, scan_type))
+                        time.sleep(30)
+                        try:
+                            result = scanner.run_scan_command(server_info, command)
+                        except Exception:
+                            pass
+            if not result:
+                logging.warning("\t\t{}: Error during {} scan.".format(server_info.hostname, scan_type))
+                logging.debug("\t\t{}: Exception during {} scan: {}".format(server_info.hostname, scan_type, err))
+                errors = errors + 1
         return result, errors
 
-    logging.debug("\tRunning scans in serial.")
+    logging.debug("\t{} Running scans in serial.".format(server_info.hostname))
     sslv2, errors = run_scan("SSLv2", Sslv20ScanCommand(), errors)
     sslv3, errors = run_scan("SSLv3", Sslv30ScanCommand(), errors)
     tlsv1, errors = run_scan("TLSv1.0", Tlsv10ScanCommand(), errors)
@@ -643,25 +679,39 @@ def scan_serial(scanner, server_info, data, options):
     certs = None
     if errors < 2 and options.get("sslyze_certs", True) is True:
         try:
-            logging.debug("\t\tCertificate information scan.")
+            logging.debug("\t\t{} Certificate information scan.".format(server_info.hostname))
             certs = scanner.run_scan_command(server_info, CertificateInfoScanCommand(ca_file=CA_FILE))
         except idna.core.InvalidCodepoint:
             logging.warning(utils.format_last_exception())
             data['errors'].append("Invalid certificate/OCSP for this domain.")
             certs = None
         except Exception as err:
-            logging.warning("{}: Error during certificate information scan.".format(server_info.hostname))
-            logging.debug("{}: Exception during certificate information scan: {}".format(server_info.hostname, err))
+            if "timed out" in str(err):
+                logging.debug("\t\t{}: Timed out during certificate information scan.  Trying one more time...".format(server_info.hostname))
+                time.sleep(10)
+                try:
+                    certs = scanner.run_scan_command(server_info, CertificateInfoScanCommand(ca_file=CA_FILE))
+                except Exception as err2:
+                    if "timed out" in str(err2):
+                        logging.debug("\t\t{}: Timed out during certificate information scan.  Trying one more time...".format(server_info.hostname))
+                        time.sleep(30)
+                        try:
+                            certs = scanner.run_scan_command(server_info, CertificateInfoScanCommand(ca_file=CA_FILE))
+                        except Exception:
+                            pass
+            if not certs:
+                logging.warning("{}: Error during certificate information scan.".format(server_info.hostname))
+                logging.debug("{}: Exception during certificate information scan: {}".format(server_info.hostname, err))
     else:
         certs = None
 
     reneg = None
     if options.get("sslyze_reneg", True) is True:
-        reneg, errors = run_scan("Renegotiation", SessionRenegotiationScanCommand(), errors)
+        reneg, errors = run_scan("Renegotiation", SessionRenegotiationScanCommand(), errors, retry=False)
     else:
         reneg = None
 
-    logging.debug("\tDone scanning.")
+    logging.debug("\t{} Done scanning.".format(server_info.hostname))
 
     return sslv2, sslv3, tlsv1, tlsv1_1, tlsv1_2, tlsv1_3, certs, reneg
 
@@ -669,7 +719,7 @@ def scan_serial(scanner, server_info, data, options):
 # Run each scan in parallel, using multi-processing.
 # Faster, but can generate many processes.
 def scan_parallel(scanner, server_info, data, options):
-    logging.debug("\tRunning scans in parallel.")
+    logging.debug("\t{} Running scans in parallel.".format(server_info.hostname))
 
     def queue(command):
         try:
@@ -677,12 +727,12 @@ def scan_parallel(scanner, server_info, data, options):
         except OSError:
             text = ("OSError - likely too many processes and open files.")
             data['errors'].append(text)
-            logging.warning("%s\n%s" % (text, utils.format_last_exception()))
+            logging.warning("%s %s\n%s" % (server_info.hostname, text, utils.format_last_exception()))
             return None, None, None, None, None, None, None
         except Exception:
             text = ("Unknown exception queueing sslyze command.\n%s" % utils.format_last_exception())
             data['errors'].append(text)
-            logging.warning(text)
+            logging.warning("%s %s" % (server_info.hostname, text))
             return None, None, None, None, None, None, None
 
     # Initialize commands and result containers
@@ -744,7 +794,7 @@ def scan_parallel(scanner, server_info, data, options):
     if was_error:
         return None, None, None, None, None, None, None, None
 
-    logging.debug("\tDone scanning.")
+    logging.debug("\t{} Done scanning.".format(server_info.hostname))
 
     return sslv2, sslv3, tlsv1, tlsv1_1, tlsv1_2, tlsv1_3, certs, reneg
 
