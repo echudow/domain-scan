@@ -416,142 +416,151 @@ def analyze_protocols_and_ciphers(data, sslv2, sslv3, tlsv1, tlsv1_1, tlsv1_2, t
 def analyze_certs(certs):
     data = {'certs': {}}
 
-    # Served chain.
-    served_chain = certs.certificate_chain
-
-    # Constructed chain may not be there if it didn't validate.
-    constructed_chain = certs.verified_certificate_chain
-
-    highest_served = parse_cert(served_chain[-1])
-    issuer = cert_issuer_name(highest_served)
-
-    if issuer:
-        data['certs']['served_issuer'] = issuer
-    else:
-        data['certs']['served_issuer'] = "(None found)"
-
-    if (constructed_chain and (len(constructed_chain) > 0)):
-        highest_constructed = parse_cert(constructed_chain[-1])
-        issuer = cert_issuer_name(highest_constructed)
-        if issuer:
-            data['certs']['constructed_issuer'] = issuer
-        else:
-            data['certs']['constructed_issuer'] = "(None constructed)"
-
-    leaf = parse_cert(served_chain[0])
-    leaf_key = leaf.public_key()
-
-    if hasattr(leaf_key, "key_size"):
-        data['certs']['key_length'] = leaf_key.key_size
-    elif hasattr(leaf_key, "curve"):
-        data['certs']['key_length'] = leaf_key.curve.key_size
-    else:
-        data['certs']['key_length'] = None
-
-    if(data['certs']['key_length'] < 2048):
-        data['certs']['certificate_less_than_2048'] = True
-    else:
-        data['certs']['certificate_less_than_2048'] = False
-
-    if isinstance(leaf_key, rsa.RSAPublicKey):
-        leaf_key_type = "RSA"
-    elif isinstance(leaf_key, dsa.DSAPublicKey):
-        leaf_key_type = "DSA"
-    elif isinstance(leaf_key, ec.EllipticCurvePublicKey):
-        leaf_key_type = "ECDSA"
-    else:
-        leaf_key_type == str(leaf_key.__class__)
-
-    data['certs']['key_type'] = leaf_key_type
-
-    # Signature of the leaf certificate only.
-    data['certs']['leaf_signature'] = leaf.signature_hash_algorithm.name
-
-    if(leaf.signature_hash_algorithm.name == "MD5"):
-        data['certs']['md5_signed_certificate'] = True
-    else:
-        data['certs']['md5_signed_certificate'] = False
-
-    if(leaf.signature_hash_algorithm.name == "SHA1"):
-        data['certs']['sha1_signed_certificate'] = True
-    else:
-        data['certs']['sha1_signed_certificate'] = False
-
-    # Beginning and expiration dates of the leaf certificate
-    data['certs']['not_before'] = leaf.not_valid_before
-    data['certs']['not_after'] = leaf.not_valid_after
-
-    now = datetime.datetime.now()
-    if (now < leaf.not_valid_before) or (now > leaf.not_valid_after):
-        data['certs']['expired_certificate'] = True
-    else:
-        data['certs']['expired_certificate'] = False
-
-    any_sha1_served = False
-    for cert in served_chain:
-        if parse_cert(cert).signature_hash_algorithm.name == "sha1":
-            any_sha1_served = True
-
-    data['certs']['any_sha1_served'] = any_sha1_served
-
-    if data['certs'].get('constructed_issuer'):
-        data['certs']['any_sha1_constructed'] = certs.has_sha1_in_certificate_chain
-
-    extensions = leaf.extensions
-    oids = []
     try:
-        ext = extensions.get_extension_for_class(cryptography.x509.extensions.CertificatePolicies)
-        policies = ext.value
-        for policy in policies:
-            oids.append(policy.policy_identifier.dotted_string)
-    except cryptography.x509.ExtensionNotFound:
-        # If not found, just move on.
-        pass
+        # Served chain.
+        served_chain = certs.certificate_chain
 
-    data['certs']['ev'] = {
-        'asserted': False,
-        'trusted': False,
-        'trusted_oids': [],
-        'trusted_browsers': []
-    }
+        # Constructed chain may not be there if it didn't validate.
+        constructed_chain = certs.verified_certificate_chain
 
-    for oid in oids:
+        try:
+            highest_served = parse_cert(served_chain[-1])
+            issuer = cert_issuer_name(highest_served)
 
-        # If it matches the generic EV OID, the certifciate is
-        # asserting that it was issued following the EV guidelines.
-        data['certs']['ev']['asserted'] = (oid == evg_oid)
+            if issuer:
+                data['certs']['served_issuer'] = issuer
+            else:
+                data['certs']['served_issuer'] = "(None found)"
+        except Exception as err:
+            logging.debug("\t\t Error getting certificate issuer: {}".format(err))
 
-        # Check which browsers for which the cert is marked as EV.
-        browsers = []
-        if oid in mozilla_ev:
-            browsers.append("Mozilla")
-        if oid in google_ev:
-            browsers.append("Google")
-        if oid in microsoft_ev:
-            browsers.append("Microsoft")
-        if oid in apple_ev:
-            browsers.append("Apple")
+        try:
+            if (constructed_chain and (len(constructed_chain) > 0)):
+                highest_constructed = parse_cert(constructed_chain[-1])
+                issuer = cert_issuer_name(highest_constructed)
+                if issuer:
+                    data['certs']['constructed_issuer'] = issuer
+                else:
+                    data['certs']['constructed_issuer'] = "(None constructed)"
+        except Exception as err:
+            logging.debug("\t\t Error getting certificate constructed issuer: {}".format(err))
 
-        if len(browsers) > 0:
-            data['certs']['ev']['trusted'] = True
+        leaf = parse_cert(served_chain[0])
+        leaf_key = leaf.public_key()
 
-            # Log each new OID we observe as marked for EV.
-            if oid not in data['certs']['ev']['trusted_oids']:
-                data['certs']['ev']['trusted_oids'].append(oid)
+        if hasattr(leaf_key, "key_size"):
+            data['certs']['key_length'] = leaf_key.key_size
+        elif hasattr(leaf_key, "curve"):
+            data['certs']['key_length'] = leaf_key.curve.key_size
+        else:
+            data['certs']['key_length'] = None
 
-            # For all matching browsers, log each new one.
-            for browser in browsers:
-                if browser not in data['certs']['ev']['trusted_browsers']:
-                    data['certs']['ev']['trusted_browsers'].append(browser)
+        if(data['certs']['key_length'] < 2048):
+            data['certs']['certificate_less_than_2048'] = True
+        else:
+            data['certs']['certificate_less_than_2048'] = False
 
-    # Is this cert issued by Symantec?
-    distrust_timeline = certs.symantec_distrust_timeline
-    is_symantec_cert = (distrust_timeline is not None)
-    data['certs']['is_symantec_cert'] = is_symantec_cert
-    if is_symantec_cert:
-        data['certs']['symantec_distrust_date'] = distrust_timeline.name
-    else:
-        data['certs']['symantec_distrust_date'] = None
+        if isinstance(leaf_key, rsa.RSAPublicKey):
+            leaf_key_type = "RSA"
+        elif isinstance(leaf_key, dsa.DSAPublicKey):
+            leaf_key_type = "DSA"
+        elif isinstance(leaf_key, ec.EllipticCurvePublicKey):
+            leaf_key_type = "ECDSA"
+        else:
+            leaf_key_type == str(leaf_key.__class__)
+
+        data['certs']['key_type'] = leaf_key_type
+
+        # Signature of the leaf certificate only.
+        data['certs']['leaf_signature'] = leaf.signature_hash_algorithm.name
+
+        if(leaf.signature_hash_algorithm.name == "MD5"):
+            data['certs']['md5_signed_certificate'] = True
+        else:
+            data['certs']['md5_signed_certificate'] = False
+
+        if(leaf.signature_hash_algorithm.name == "SHA1"):
+            data['certs']['sha1_signed_certificate'] = True
+        else:
+            data['certs']['sha1_signed_certificate'] = False
+
+        # Beginning and expiration dates of the leaf certificate
+        data['certs']['not_before'] = leaf.not_valid_before
+        data['certs']['not_after'] = leaf.not_valid_after
+
+        now = datetime.datetime.now()
+        if (now < leaf.not_valid_before) or (now > leaf.not_valid_after):
+            data['certs']['expired_certificate'] = True
+        else:
+            data['certs']['expired_certificate'] = False
+
+        any_sha1_served = False
+        for cert in served_chain:
+            if parse_cert(cert).signature_hash_algorithm.name == "sha1":
+                any_sha1_served = True
+
+        data['certs']['any_sha1_served'] = any_sha1_served
+
+        if data['certs'].get('constructed_issuer'):
+            data['certs']['any_sha1_constructed'] = certs.has_sha1_in_certificate_chain
+
+        extensions = leaf.extensions
+        oids = []
+        try:
+            ext = extensions.get_extension_for_class(cryptography.x509.extensions.CertificatePolicies)
+            policies = ext.value
+            for policy in policies:
+                oids.append(policy.policy_identifier.dotted_string)
+        except cryptography.x509.ExtensionNotFound:
+            # If not found, just move on.
+            pass
+
+        data['certs']['ev'] = {
+            'asserted': False,
+            'trusted': False,
+            'trusted_oids': [],
+            'trusted_browsers': []
+        }
+
+        for oid in oids:
+
+            # If it matches the generic EV OID, the certifciate is
+            # asserting that it was issued following the EV guidelines.
+            data['certs']['ev']['asserted'] = (oid == evg_oid)
+
+            # Check which browsers for which the cert is marked as EV.
+            browsers = []
+            if oid in mozilla_ev:
+                browsers.append("Mozilla")
+            if oid in google_ev:
+                browsers.append("Google")
+            if oid in microsoft_ev:
+                browsers.append("Microsoft")
+            if oid in apple_ev:
+                browsers.append("Apple")
+
+            if len(browsers) > 0:
+                data['certs']['ev']['trusted'] = True
+
+                # Log each new OID we observe as marked for EV.
+                if oid not in data['certs']['ev']['trusted_oids']:
+                    data['certs']['ev']['trusted_oids'].append(oid)
+
+                # For all matching browsers, log each new one.
+                for browser in browsers:
+                    if browser not in data['certs']['ev']['trusted_browsers']:
+                        data['certs']['ev']['trusted_browsers'].append(browser)
+
+        # Is this cert issued by Symantec?
+        distrust_timeline = certs.symantec_distrust_timeline
+        is_symantec_cert = (distrust_timeline is not None)
+        data['certs']['is_symantec_cert'] = is_symantec_cert
+        if is_symantec_cert:
+            data['certs']['symantec_distrust_date'] = distrust_timeline.name
+        else:
+            data['certs']['symantec_distrust_date'] = None
+    except Exception as err:
+        logging.debug("\t\t Error analyzing certs: {}".format(err))
 
     return data['certs']
 
