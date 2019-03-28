@@ -90,7 +90,7 @@ def scan(domain, environment, options):
     results = pshtt.inspect_domains(
         [domain],
         {
-            'timeout': pshtt_timeout,
+            'timeout': options.get("timeout", pshtt_timeout),
             'user_agent': user_agent,
             'debug': options.get("debug", False),
             'ca_file': options.get("ca_file"),
