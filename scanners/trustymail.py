@@ -1,6 +1,9 @@
 import logging
 from typing import Any, List
 
+import trustymail
+import trustymail.trustymail as tmail
+
 import dns.resolver
 
 from utils import FAST_CACHE_KEY
@@ -20,6 +23,21 @@ default_smtp_ports = '25,465,587'
 
 # Advertise lambda support
 lambda_support = True
+
+# Initialize dnssec checks once, at the top of the scan.
+def init(environment, options):
+    try:
+        timeout = int(options.get('timeout', default_timeout))
+        tmail.DNS_TIMEOUT = timeout
+        dns_hostnames = list_from_dict_key(options, 'dns')
+        if dns_hostnames:
+            tmail.DNS_RESOLVERS = dns_hostnames
+        else:
+            tmail.DNS_RESOLVERS = dns.resolver.get_default_resolver().nameservers
+        tmail.DNSSEC_RESOLVERS = tmail.DNS_RESOLVERS
+        tmail.initialize_dnssec_test(options)
+    except Exception as error:
+        logging.debug('Error initializing trustymail dnssec checks: {}'.format(str(error)))
 
 
 # Check the fastcache to determine if we have already tested any of
@@ -167,14 +185,13 @@ def scan(domain, environment, options):
         scan_types['mx'] = True
         scan_types['starttls'] = False
 
-    import trustymail
+    
     # Monkey patching trustymail to make it cache the PSL where we
     # want
     trustymail.PublicSuffixListFilename = 'cache/public-suffix-list.txt'
     if environment['scan_method'] == 'lambda':
         # Monkey patching trustymail to make the PSL cache read-only
         trustymail.PublicSuffixListReadOnly = True
-    import trustymail.trustymail as tmail
 
     data = tmail.scan(domain, timeout, smtp_timeout, smtp_localhost,
                       smtp_ports, smtp_cache, scan_types,
@@ -315,6 +332,7 @@ headers = [
     "DMARC Policy", "DMARC Subdomain Policy", "DMARC Policy Percentage",
     "DMARC Aggregate Report URIs", "DMARC Forensic Report URIs",
     "DMARC Has Aggregate Report URI", "DMARC Has Forensic Report URI",
-    "DMARC Reporting Address Acceptance Error",
+    "DMARC Reporting Address Acceptance Error", "SPF Number of IPs",
+    "MX TLSA Record", "MX TLSA DNSSEC", "MX TLSA Valid",
     "Syntax Errors", "Debug Info"
 ]
