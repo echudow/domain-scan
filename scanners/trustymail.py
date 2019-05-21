@@ -150,7 +150,7 @@ def scan(domain, environment, options):
 
     # --starttls implies --mx
     if options.get('starttls', False):
-        options.set('mx', True)
+        options['mx'] = True
 
     # Whether or not to use an in-memory SMTP cache.  For runs against
     # a single domain this will not make any difference, unless an MX
