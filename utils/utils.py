@@ -578,8 +578,8 @@ def domain_uses_www(domain, cache_dir="./cache"):
     # We know the canonical URL, return True if it's www.
     url = inspection.get("Canonical URL")
     return (
-        url.startswith("http://www") or
-        url.startswith("https://www")
+        url.startswith("http://www.") or
+        url.startswith("https://www.")
     )
 
 

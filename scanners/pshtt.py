@@ -2,6 +2,7 @@ import codecs
 import logging
 import os
 import re
+from typing import Any, List
 
 from pshtt import pshtt
 from utils import utils
@@ -69,6 +70,30 @@ def init_domain(domain, environment, options):
     return environment
 
 
+def list_from_dict_key(d: dict, k: str, delim: str=',') -> List[str]:
+    """Extract a list from a delimited string in a dictionary.
+    Parameters
+    ----------
+    d : dict
+        The dictionary containing the delimited string.
+    k : str
+        The key under which the delimited value is stored in the
+        dictionary.
+    delim : str
+        The delimiter for the delimited string.
+    Returns
+    -------
+    List[str]: The list extracted from the delimited string, or an
+    empty list if the dictionary key is None or does not exist.
+    """
+    ans = []
+    s = d.get(k, None)
+    if s is not None:
+        ans = s.split(',')
+
+    return ans
+
+
 # Run locally or in the cloud.
 # Gets third-party data passed into the environment.
 def scan(domain, environment, options):
@@ -94,7 +119,8 @@ def scan(domain, environment, options):
             'user_agent': user_agent,
             'debug': options.get("debug", False),
             'ca_file': options.get("ca_file"),
-            'pt_int_ca_file': options.get("pt_int_ca_file")
+            'pt_int_ca_file': options.get("pt_int_ca_file"),
+            'dns': list_from_dict_key(options, 'dns')
         }
     )
 
