@@ -418,7 +418,14 @@ def analyze_certs(certs):
 
     try:
         # Served chain.
-        served_chain = certs.certificate_chain
+        served_chain = None
+        functions = dir(certs)
+        if "certificate_chain" in functions:
+            served_chain = certs.certificate_chain
+        elif "received_certificate_chain" in functions:
+            served_chain = certs.received_certificate_chain
+        else:
+            raise Exception("Missing sslyze function to get certificate chain")
 
         # Constructed chain may not be there if it didn't validate.
         constructed_chain = certs.verified_certificate_chain
@@ -502,7 +509,10 @@ def analyze_certs(certs):
         data['certs']['any_sha1_served'] = any_sha1_served
 
         if data['certs'].get('constructed_issuer'):
-            data['certs']['any_sha1_constructed'] = certs.has_sha1_in_certificate_chain
+            if "has_sha1_in_certificate_chain" in functions:
+                data['certs']['any_sha1_constructed'] = certs.has_sha1_in_certificate_chain
+            elif "verified_chain_has_sha1_signature" in functions:
+                data['certs']['any_sha1_constructed'] = certs.verified_chain_has_sha1_signature
 
         extensions = leaf.extensions
         oids = []
@@ -552,13 +562,17 @@ def analyze_certs(certs):
                         data['certs']['ev']['trusted_browsers'].append(browser)
 
         # Is this cert issued by Symantec?
-        distrust_timeline = certs.symantec_distrust_timeline
-        is_symantec_cert = (distrust_timeline is not None)
-        data['certs']['is_symantec_cert'] = is_symantec_cert
-        if is_symantec_cert:
-            data['certs']['symantec_distrust_date'] = distrust_timeline.name
-        else:
-            data['certs']['symantec_distrust_date'] = None
+        if "symantec_distrust_timeline" in functions:
+            distrust_timeline = certs.symantec_distrust_timeline
+            is_symantec_cert = (distrust_timeline is not None)
+            data['certs']['is_symantec_cert'] = is_symantec_cert
+            if is_symantec_cert:
+                data['certs']['symantec_distrust_date'] = distrust_timeline.name
+            else:
+                data['certs']['symantec_distrust_date'] = None
+        elif "verified_chain_has_legacy_symantec_anchor" in functions:
+            data['certs']['is_symantec_cert'] = certs.verified_chain_has_legacy_symantec_anchor
+        
     except Exception as err:
         logging.debug("\t\t Error analyzing certs: {}".format(err))
 
