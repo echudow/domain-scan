@@ -31,6 +31,9 @@ import cryptography.hazmat.backends.openssl
 from cryptography.hazmat.primitives.serialization import Encoding
 from cryptography.hazmat.primitives.asymmetric import ec, dsa, rsa
 
+import dns
+import dns.resolver
+
 from utils import FAST_CACHE_KEY, utils
 
 # Number of seconds to wait during sslyze connection check.
@@ -58,23 +61,30 @@ def init_domain(domain, environment, options):
     cached_data = []
     cache_dir = options.get('_', {}).get('cache_dir', './cache')
 
-    # If we have pshtt data, skip domains which pshtt saw as not
-    # supporting HTTPS at all.
-    if utils.domain_doesnt_support_https(domain, cache_dir=cache_dir):
-        logging.warning('\tHTTPS not supported for {}'.format(domain))
-    else:
-        # If we have pshtt data and it says canonical endpoint uses
-        # www and the given domain is bare, add www.
-        if utils.domain_uses_www(domain, cache_dir=cache_dir):
-            hostname = 'www.%s' % domain
-        else:
-            hostname = domain
+    scans = options.get('scan','')
+    is_pshtt_scan = "pshtt" in scans
+    is_trustymail_scan = "trustymail" in scans
 
-        hosts_to_scan.append({
-            'hostname': hostname,
-            'port': 443,
-            'starttls_smtp': False
-        })
+
+    # If we have pshtt data, skip domains which pshtt saw as not
+    # supporting HTTPS at all. If we are doing a trustymail scan 
+    # skip TLS scans unless it is also a pshtt scan too.
+    if is_pshtt_scan or not is_trustymail_scan:
+        if utils.domain_doesnt_support_https(domain, cache_dir=cache_dir):
+            logging.warning('\tHTTPS not supported for {}'.format(domain))
+        else:
+            # If we have pshtt data and it says canonical endpoint uses
+            # www and the given domain is bare, add www.
+            if utils.domain_uses_www(domain, cache_dir=cache_dir):
+                hostname = 'www.%s' % domain
+            else:
+                hostname = domain
+
+            hosts_to_scan.append({
+                'hostname': hostname,
+                'port': 443,
+                'starttls_smtp': False
+            })
 
     # If we have trustymail data, see if there are any mail servers
     # that support STARTTLS that we should scan
@@ -645,6 +655,9 @@ def init_sslyze(hostname, port, starttls_smtp, options, sync=False):
             except Exception as err:
                 logging.warning("\t{}:{} Server connectivity not established during test.".format(hostname, port))
                 return None, None
+    except dns.exception.DNSException as err:
+        logging.warning("\t{}:{} DNS exception when performing sslyze server connectivity info check.".format(hostname, port))
+        logging.debug("\t:{}:{} DNS exception: {}".format(hostname, port, err))
     except Exception as err:
         utils.notify(err)
         logging.warning("\t{}:{} Unknown exception when performing server connectivity info.".format(hostname, port))
