@@ -658,6 +658,7 @@ def init_sslyze(hostname, port, starttls_smtp, options, sync=False):
     except dns.exception.DNSException as err:
         logging.warning("\t{}:{} DNS exception when performing sslyze server connectivity info check.".format(hostname, port))
         logging.debug("\t:{}:{} DNS exception: {}".format(hostname, port, err))
+        return None, None
     except Exception as err:
         utils.notify(err)
         logging.warning("\t{}:{} Unknown exception when performing server connectivity info.".format(hostname, port))
