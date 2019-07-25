@@ -194,6 +194,10 @@ def scan_domains(scanners: List[ModuleType], domains: Path,
         scan_end_time = scan_utils.local_now()
         duration = scan_end_time - scan_start_time
 
+        # Finalize the scanner:
+        if hasattr(scanner, "finalize"):
+            scanner.finalize(environment, options)
+
         # Store scan-specific time information.
         durations[handles[name]['name']] = {
             'start_time': scan_utils.utc_timestamp(scan_start_time),

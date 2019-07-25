@@ -38,11 +38,21 @@ def init(environment, options):
     else:
         suffix_list = None
 
+    # Initialize the scanner:
+    if hasattr(pshtt, "init"):
+        pshtt.init(environment, options)
+
     return {
         'preload_list': pshtt.load_preload_list(),
         'preload_pending': pshtt.load_preload_pending(),
         'suffix_list': suffix_list
     }
+
+
+# Finalize the scanner
+def finalize(environment, options):
+    if hasattr(pshtt, "finalize"):
+        pshtt.finalize(environment, options)
 
 
 # To save on bandwidth to Lambda, slice the preload and pending lists
