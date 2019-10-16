@@ -333,6 +333,6 @@ headers = [
     "DMARC Aggregate Report URIs", "DMARC Forensic Report URIs",
     "DMARC Has Aggregate Report URI", "DMARC Has Forensic Report URI",
     "DMARC Reporting Address Acceptance Error", "SPF Number of IPs",
-    "MX TLSA Record", "MX TLSA DNSSEC", "MX TLSA Valid", "MX TLSA Matches STARTTLS"
+    "MX TLSA Record", "MX TLSA DNSSEC", "MX TLSA Valid", "MX TLSA Matches STARTTLS",
     "Syntax Errors", "Debug Info"
 ]
