@@ -31,6 +31,8 @@ import cryptography.hazmat.backends.openssl
 from cryptography.hazmat.primitives.serialization import Encoding
 from cryptography.hazmat.primitives.asymmetric import ec, dsa, rsa
 
+import re
+
 import dns
 import dns.resolver
 
@@ -406,11 +408,28 @@ def analyze_protocols_and_ciphers(data, sslv2, sslv3, tlsv1, tlsv1_1, tlsv1_2, t
 
             if ("MD5" in name):
                 any_MD5 = True
-
-            parts = name.split('_')
-            for p in parts:
-                if (p.isdigit()) and (int(p) < 128):
+            
+            if (cipher.key_size):
+                if (cipher.key_size < 128):
                     any_less_than_128_bits = True
+            else:
+                logging.debug("{}: Error getting cipher key size for '{}', performing heuristic check instead.".format(data['hostname'], name))
+                if "DES" in name and "3DES" not in name:
+                    any_less_than_128_bits = True
+                if "EXPORT" in name:
+                    any_less_than_128_bits = True
+                re1 = r'([A-Z]+_?\d+)[-_]'
+                matches = re.findall(re1, name)
+                for match in matches:
+                    if(match in ["RC4", "RC2", "MD5", "CHACHA20", "CCM_8", "EDE3", "CBC3"]):
+                        continue
+                    re2 = r'(\d+)'
+                    matches2 = re.search(re2, match)
+                    match2 = matches2[0]
+                    if(match2 and int(match2) < 128):
+                        any_less_than_128_bits = True
+                if any_less_than_128_bits:
+                    logging.debug("{}: Cipher key size is less than 128 bits: {}".format(data['hostname'], name))
 
         data['config']['any_rc4'] = any_rc4
         data['config']['all_rc4'] = all_rc4
