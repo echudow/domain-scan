@@ -400,7 +400,7 @@ def analyze_protocols_and_ciphers(data, sslv2, sslv3, tlsv1, tlsv1_1, tlsv1_2, t
             else:
                 all_dhe = False
 
-            if ("EXPORT" in name):
+            if ("EXP" in name):
                 any_export = True
 
             if ("NULL" in name):
@@ -412,12 +412,14 @@ def analyze_protocols_and_ciphers(data, sslv2, sslv3, tlsv1, tlsv1_1, tlsv1_2, t
             if (cipher.key_size):
                 if (cipher.key_size < 128):
                     any_less_than_128_bits = True
+                    logging.debug("{}: Cipher key_size is less than 128 bits: {} ({})".format(data['hostname'], name, cipher.key_size))
             else:
                 logging.debug("{}: Error getting cipher key size for '{}', performing heuristic check instead.".format(data['hostname'], name))
+                less_than_128_bits = False				
                 if "DES" in name and "3DES" not in name:
-                    any_less_than_128_bits = True
-                if "EXPORT" in name:
-                    any_less_than_128_bits = True
+                    less_than_128_bits = True
+                if "EXP" in name:
+                    less_than_128_bits = True
                 re1 = r'([A-Z]+_?\d+)[-_]'
                 matches = re.findall(re1, name)
                 for match in matches:
@@ -427,8 +429,9 @@ def analyze_protocols_and_ciphers(data, sslv2, sslv3, tlsv1, tlsv1_1, tlsv1_2, t
                     matches2 = re.search(re2, match)
                     match2 = matches2[0]
                     if(match2 and int(match2) < 128):
-                        any_less_than_128_bits = True
-                if any_less_than_128_bits:
+                        less_than_128_bits = True
+                if less_than_128_bits:
+                    any_less_than_128_bits = True
                     logging.debug("{}: Cipher key size is less than 128 bits: {}".format(data['hostname'], name))
 
         data['config']['any_rc4'] = any_rc4
