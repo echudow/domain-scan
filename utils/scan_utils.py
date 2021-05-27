@@ -370,7 +370,9 @@ class ArgumentParser(argparse.ArgumentParser):
 
 
 def build_scan_options_parser() -> ArgumentParser:
-    """ Builds the argparse parser object. """
+    """ Builds the argparse parser object. 
+        Remember that it changes '-' to '_' in the options name.
+    """
     parser = ArgumentParser(prefix_chars="--")
     parser.add_argument("domains", help="".join([
         "Either a comma-separated list of domains or the url of a CSV ",
@@ -443,6 +445,12 @@ def build_scan_options_parser() -> ArgumentParser:
                         help="ca_file: Location of PEM file of trust store to verify certs with.")
     parser.add_argument("--pt_int_ca_file",
                         help="pt_int_ca_file: Location of PEM file of public trust store with any needed intermediate certificates to verify certs with.")
+    parser.add_argument("--cache-third-parties",
+                        help="cache-third-parties: Location ot store third party cache files.")
+    parser.add_argument("--user_agent",
+                        help="user_agent: User agent string to use in scan request header.")
+    parser.add_argument("--adfs-hsts", action="store_true",
+                        help="adfs-hsts: Specifically scan /adfs/ls/ for an HSTS header even without a redirect to it.")
 
     # sslyze:
     parser.add_argument("--sslyze-serial",
@@ -623,6 +631,8 @@ def begin_csv_writing(scanner: ModuleType, options: dict,
     scanner_file = scanner_csv_path.open('w', newline='')
     scanner_writer = csv.writer(scanner_file)
 
+    print("Opening csv file for scanner {}: {}".format(name, scanner_csv_path))
+
     scanner_writer.writerow(headers)
 
     return {
@@ -733,3 +743,4 @@ def handle_domains_argument(domains: str, cache_dir: Path) -> Union[Path, str]:
             logging.error(msg)
             raise FileNotFoundError(msg)
     return domains
+

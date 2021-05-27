@@ -561,6 +561,35 @@ def domain_doesnt_support_https(domain, cache_dir="./cache"):
 
 
 # Check whether we have HTTP behavior data cached for a domain.
+# If so, check which servers support https.
+# Useful for saving time on TLS-related scanning.
+def domain_servers_that_support_https(domain, cache_dir="./cache"):
+    # Make sure we have the cached data.
+    inspection = data_for(domain, "pshtt", cache_dir=cache_dir)
+    if not inspection:
+        return False
+
+    if (inspection.__class__ is dict) and inspection.get('invalid'):
+        return False
+
+    https = inspection.get("endpoints").get("https")
+    httpswww = inspection.get("endpoints").get("httpswww")
+
+    def endpoint_used(endpoint):
+        # commented out next line to remove bad hostname check so we can still get info about weak crypto even if the cert doesn't match
+        # return endpoint.get("live") and (not endpoint.get("https_bad_hostname"))
+        return endpoint.get("live")
+
+    retVal = []
+    if endpoint_used(https):
+        retVal += [https.url.replace("https://","")]
+    if endpoint_used(httpswww):
+        retVal += [httpswww.url.replace("https://","")]
+
+    return retVal
+
+
+# Check whether we have HTTP behavior data cached for a domain.
 # If so, check if we know it canonically prepends 'www'.
 def domain_uses_www(domain, cache_dir="./cache"):
     # Don't prepend www to www.
@@ -583,6 +612,8 @@ def domain_uses_www(domain, cache_dir="./cache"):
     )
 
 
+# Check for mail servers that support starttls from the 
+# trustymail cache
 def domain_mail_servers_that_support_starttls(domain, cache_dir="./cache"):
     retVal = []
     data = data_for(domain, 'trustymail', cache_dir=cache_dir)
@@ -709,3 +740,4 @@ def suffix_pattern(suffixes):
 
 def flatten(l):
     return list(chain.from_iterable(l))
+

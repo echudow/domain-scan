@@ -35,6 +35,7 @@ import re
 
 import dns
 import dns.resolver
+import socket
 
 from utils import FAST_CACHE_KEY, utils
 
@@ -143,6 +144,7 @@ def scan(domain, environment, options):
             'hostname': host_to_scan.get('hostname'),
             'port': host_to_scan.get('port'),
             'starttls_smtp': host_to_scan.get('starttls_smtp'),
+            'ip': '',
             'protocols': {},
             'config': {},
             'certs': {},
@@ -221,6 +223,7 @@ def to_rows(data):
         retVal.append([
             row['hostname'],
             row['port'],
+            row['ip'],
             row['starttls_smtp'],
 
             row['protocols'].get('sslv2'), row['protocols'].get('sslv3'),
@@ -247,6 +250,7 @@ def to_rows(data):
 
             row['config'].get('any_export'),
             row['config'].get('any_NULL'),
+            row['config'].get('any_anon'),
             row['config'].get('any_MD5'),
             row['config'].get('any_less_than_128_bits'),
 
@@ -268,6 +272,7 @@ def to_rows(data):
 headers = [
     "Scanned Hostname",
     "Scanned Port",
+    "Scanned IP",
     "Scanned for STARTTLS SMTP",
     "SSLv2", "SSLv3", "TLSv1.0", "TLSv1.1", "TLSv1.2", "TLSv1.3",
 
@@ -287,7 +292,7 @@ headers = [
 
     "Is Symantec Cert", "Symantec Distrust Date",
 
-    "Any Export", "Any NULL", "Any MD5", "Any Less Than 128 Bits",
+    "Any Export", "Any NULL", "Any Anon", "Any MD5", "Any Less Than 128 Bits",
     "Insecure Renegotiation",
     "Certificate Less Than 2048",
     "MD5 Signed Certificate", "SHA-1 Signed Certificate",
@@ -324,7 +329,13 @@ def run_sslyze(data, environment, options):
 
     if server_info is None:
         data['errors'].append("Connectivity not established.")
+        try:
+            data['ip'] = socket.gethostbyname(data['hostname'])
+        except:
+            pass
         return data
+
+    data['ip'] = server_info.ip_address
 
     # Whether sync or concurrent, get responses for all scans.
     if sync:
@@ -384,6 +395,7 @@ def analyze_protocols_and_ciphers(data, sslv2, sslv3, tlsv1, tlsv1_1, tlsv1_2, t
         any_NULL = False
         any_MD5 = False
         any_less_than_128_bits = False
+        any_anon = False
 
         for cipher in accepted_ciphers:
             name = cipher.openssl_name
@@ -409,6 +421,11 @@ def analyze_protocols_and_ciphers(data, sslv2, sslv3, tlsv1, tlsv1_1, tlsv1_2, t
             if ("MD5" in name):
                 any_MD5 = True
             
+            logging.debug("{}: Checking for anon in name '{}'.".format(data['hostname'], name))
+            if ("ANON" in cipher.name or "anon" in cipher.name):
+                logging.debug("{}: Found anon!".format(data['hostname']))
+                any_anon = True
+
             if (cipher.key_size):
                 if (cipher.key_size < 128):
                     any_less_than_128_bits = True
@@ -443,6 +460,7 @@ def analyze_protocols_and_ciphers(data, sslv2, sslv3, tlsv1, tlsv1_1, tlsv1_2, t
         data['config']['any_NULL'] = any_NULL
         data['config']['any_MD5'] = any_MD5
         data['config']['any_less_than_128_bits'] = any_less_than_128_bits
+        data['config']['any_anon'] = any_anon
 
 
 def analyze_certs(certs):
@@ -1079,3 +1097,4 @@ apple_ev = [
     "2.16.840.1.114414.1.7.23.3",
     "2.16.840.1.114414.1.7.24.3"
 ]
+

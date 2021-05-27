@@ -127,10 +127,13 @@ def scan(domain, environment, options):
         {
             'timeout': options.get("timeout", pshtt_timeout),
             'user_agent': user_agent,
+            'adfs_hsts': options.get("adfs_hsts"),
             'debug': options.get("debug", False),
             'ca_file': options.get("ca_file"),
             'pt_int_ca_file': options.get("pt_int_ca_file"),
-            'dns': list_from_dict_key(options, 'dns')
+            'dns': list_from_dict_key(options, 'dns'),
+            'preload_list': environment.get('preload_list'),
+            'preload_pending': environment.get('preload_pending'),
         }
     )
 
@@ -171,3 +174,4 @@ headers = [
 
 def format_domain(domain):
     return re.sub(r"^(https?://)?(www\.)?", "", domain)
+
