@@ -166,7 +166,7 @@ headers = [
     "Domain Enforces HTTPS", "Domain Uses Strong HSTS",
     "HTTPS Live", "HTTPS Full Connection", "HTTPS Client Auth Required",
     "HTTPS Publicly Trusted", "HTTPS Custom Truststore Trusted",
-    "IP", "Server Header", "Server Version", "HTTPS Cert Chain Length",
+    "IP", "Server Header", "Server Version", "Status Code", "HTTPS Cert Chain Length",
     "HTTPS Probably Missing Intermediate Cert", "Notes",
     "Unknown Error",
 ]
