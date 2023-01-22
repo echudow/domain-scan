@@ -24,7 +24,8 @@ from typing import (
 from types import ModuleType
 from urllib.error import URLError
 
-import publicsuffix
+# import publicsuffix # deprecated
+from publicsuffixlist.compat import PublicSuffixList
 import requests
 import strict_rfc3339
 
@@ -312,30 +313,22 @@ def base_domain_for(subdomain, cache_dir="./cache"):
 # list of lines read from the file.
 def load_suffix_list(cache_dir="./cache"):
 
-    cached_psl = cache_single("public-suffix-list.txt", cache_dir=cache_dir)
+    logging.debug("Using cached Public Suffix List...")
+    suffixes = PublicSuffixList()
 
-    if os.path.exists(cached_psl):
-        logging.debug("Using cached Public Suffix List...")
-        with codecs.open(cached_psl, encoding='utf-8') as psl_file:
-            suffixes = publicsuffix.PublicSuffixList(psl_file)
-            content = psl_file.readlines()
-    else:
-        # File does not exist, download current list and cache it at given location.
-        logging.debug("Downloading the Public Suffix List...")
-        try:
-            cache_file = publicsuffix.fetch()
-        except URLError as err:
-            logging.warning("Unable to download the Public Suffix List...")
-            logging.debug("{}".format(err))
-            return None, None
+    # File does not exist, download current list and cache it at given location.
+    # logging.debug("Downloading the Public Suffix List...")
+    #    try:
+    #        # cache_file = publicsuffix.fetch() # broken
+    #        from publicsuffixlist.update import updatePSL
+    #        updatePSL()
+    #    except URLError as err:
+    #        logging.warning("Unable to download the Public Suffix List...")
+    #        logging.debug("{}".format(err))
+    #        return None, None
+    #    suffixes = PublicSuffixList()
 
-        content = cache_file.readlines()
-        suffixes = publicsuffix.PublicSuffixList(content)
-
-        # Cache for later.
-        write(''.join(content), cached_psl)
-
-    return suffixes, content
+    return suffixes, None
 # /Cache Handling #
 
 
