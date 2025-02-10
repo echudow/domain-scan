@@ -16,14 +16,30 @@ import logging
 import datetime
 import time
 from typing import Any
+from pathlib import Path  # Python3
 
+""" for old sslyze
 from sslyze.server_connectivity_tester import ServerConnectivityTester, ServerConnectivityError
 from sslyze.synchronous_scanner import SynchronousScanner
 from sslyze.concurrent_scanner import ConcurrentScanner, PluginRaisedExceptionScanResult
 from sslyze.plugins.openssl_cipher_suites_plugin import Tlsv10ScanCommand, Tlsv11ScanCommand, Tlsv12ScanCommand, Tlsv13ScanCommand, Sslv20ScanCommand, Sslv30ScanCommand
-from sslyze.plugins.certificate_info_plugin import CertificateInfoScanCommand
+from sslyze.plugins.certificate_info_plugin import CertificateInfoScanCommand, _SymantecDistructTester
 from sslyze.plugins.session_renegotiation_plugin import SessionRenegotiationScanCommand
 from sslyze.ssl_settings import TlsWrappedProtocolEnum
+"""
+
+from sslyze import (  # type: ignore
+    Scanner,
+    ServerConnectivityTester,
+    ServerNetworkLocationViaDirectConnection,
+    ServerNetworkConfiguration,
+    ServerScanRequest,
+)
+from sslyze.errors import ConnectionToServerFailed  # type: ignore
+from sslyze.plugins.certificate_info.implementation import (  # type: ignore
+    CertificateInfoExtraArguments,
+)
+from sslyze.plugins.scan_commands import ScanCommand  # type: ignore
 
 import idna
 import cryptography
@@ -67,7 +83,6 @@ def init_domain(domain, environment, options):
     scans = options.get('scan','')
     is_pshtt_scan = "pshtt" in scans
     is_trustymail_scan = "trustymail" in scans
-
 
     # If we have pshtt data, skip domains which pshtt saw as not
     # supporting HTTPS at all. If we are doing a trustymail scan 
@@ -292,7 +307,7 @@ headers = [
 
     "Is Symantec Cert", "Symantec Distrust Date",
 
-    "Any Export", "Any NULL", "Any Anon", "Any MD5", "Any Less Than 128 Bits",
+     "Any Export", "Any NULL", "Any Anon", "Any MD5", "Any Less Than 128 Bits",
     "Insecure Renegotiation",
     "Certificate Less Than 2048",
     "MD5 Signed Certificate", "SHA-1 Signed Certificate",
@@ -322,7 +337,7 @@ def run_sslyze(data, environment, options):
     if scan_method == "lambda":
         sync = True
     else:
-        sync = options.get("sslyze_serial", True)
+        sync = eval(options.get("sslyze_serial", "True"))
 
     # Initialize either a synchronous or concurrent scanner.
     server_info, scanner = init_sslyze(data['hostname'], data['port'], data['starttls_smtp'], options, sync=sync)
@@ -334,8 +349,8 @@ def run_sslyze(data, environment, options):
         except:
             pass
         return data
-
-    data['ip'] = server_info.ip_address
+    
+    data['ip'] = server_info.server_location.ip_address
 
     # Whether sync or concurrent, get responses for all scans.
     if sync:
@@ -345,7 +360,7 @@ def run_sslyze(data, environment, options):
 
     # Analyze protocols if all the scanners functioned.
     # Very difficult to draw conclusions if some worked and some did not, but try to be as fault tolerant as possible.
-    #if sslv2 and sslv3 and tlsv1 and tlsv1_1 and tlsv1_2 and tlsv1_3:
+    # if sslv2 and sslv3 and tlsv1 and tlsv1_1 and tlsv1_2 and tlsv1_3:
     analyze_protocols_and_ciphers(data, sslv2, sslv3, tlsv1, tlsv1_1, tlsv1_2, tlsv1_3)
 
     if certs:
@@ -369,18 +384,18 @@ def analyze_protocols_and_ciphers(data, sslv2, sslv3, tlsv1, tlsv1_1, tlsv1_2, t
 
     accepted_ciphers = []
     if sslv2:
-        accepted_ciphers += (sslv2.accepted_cipher_list or [])
+        accepted_ciphers += (sslv2.accepted_cipher_suites or [])
     if sslv3:
-        accepted_ciphers += (sslv3.accepted_cipher_list or [])
+        accepted_ciphers += (sslv3.accepted_cipher_suites or [])
     if tlsv1:
-        accepted_ciphers += (tlsv1.accepted_cipher_list or [])
+        accepted_ciphers += (tlsv1.accepted_cipher_suites or [])
     if tlsv1_1:
-        accepted_ciphers += (tlsv1_1.accepted_cipher_list or [])
+        accepted_ciphers += (tlsv1_1.accepted_cipher_suites or [])
     if tlsv1_2:
-        accepted_ciphers += (tlsv1_2.accepted_cipher_list or [])
+        accepted_ciphers += (tlsv1_2.accepted_cipher_suites or [])
     if tlsv1_3:
-        accepted_ciphers += (tlsv1_3.accepted_cipher_list or [])
-    data['ciphers'] = [cipher.name for cipher in accepted_ciphers]
+        accepted_ciphers += (tlsv1_3.accepted_cipher_suites or [])
+    data['ciphers'] = [cipher.cipher_suite.name for cipher in accepted_ciphers]
 
     if len(accepted_ciphers) > 0:
         # Look at accepted cipher suites for RC4 or DHE.
@@ -398,7 +413,7 @@ def analyze_protocols_and_ciphers(data, sslv2, sslv3, tlsv1, tlsv1_1, tlsv1_2, t
         any_anon = False
 
         for cipher in accepted_ciphers:
-            name = cipher.openssl_name
+            name = cipher.cipher_suite.openssl_name
             if "RC4" in name:
                 any_rc4 = True
             else:
@@ -420,19 +435,20 @@ def analyze_protocols_and_ciphers(data, sslv2, sslv3, tlsv1, tlsv1_1, tlsv1_2, t
 
             if ("MD5" in name):
                 any_MD5 = True
-            
+
             logging.debug("{}: Checking for anon in name '{}'.".format(data['hostname'], name))
-            if ("ANON" in cipher.name or "anon" in cipher.name):
+            if ("ANON" in name or "anon" in name):
                 logging.debug("{}: Found anon!".format(data['hostname']))
                 any_anon = True
 
-            if (cipher.key_size):
-                if (cipher.key_size < 128):
+            key_size = cipher.cipher_suite.key_size
+            if (key_size):
+                if (key_size < 128):
                     any_less_than_128_bits = True
-                    logging.debug("{}: Cipher key_size is less than 128 bits: {} ({})".format(data['hostname'], name, cipher.key_size))
+                    logging.debug("{}: Cipher key_size is less than 128 bits: {} ({})".format(data['hostname'], name, key_size))
             else:
                 logging.debug("{}: Error getting cipher key size for '{}', performing heuristic check instead.".format(data['hostname'], name))
-                less_than_128_bits = False				
+                less_than_128_bits = False
                 if "DES" in name and "3DES" not in name:
                     less_than_128_bits = True
                 if "EXP" in name:
@@ -467,165 +483,162 @@ def analyze_certs(certs):
     data = {'certs': {}}
 
     try:
-        # Served chain.
-        served_chain = None
-        functions = dir(certs)
-        if "certificate_chain" in functions:
-            served_chain = certs.certificate_chain
-        elif "received_certificate_chain" in functions:
-            served_chain = certs.received_certificate_chain
-        else:
-            raise Exception("Missing sslyze function to get certificate chain")
+        # TODO: deal with multiple certificate deployments if one is verified but the others aren't
+        for certificate_deployment in certs.certificate_deployments:
 
-        # Constructed chain may not be there if it didn't validate.
-        constructed_chain = certs.verified_certificate_chain
+            # Served chain.
+            served_chain = certificate_deployment.received_certificate_chain
 
-        try:
-            highest_served = parse_cert(served_chain[-1])
-            issuer = cert_issuer_name(highest_served)
+            # Constructed chain may not be there if it didn't validate.
+            constructed_chain = certificate_deployment.verified_certificate_chain
 
-            if issuer:
-                data['certs']['served_issuer'] = issuer
-            else:
-                data['certs']['served_issuer'] = "(None found)"
-        except Exception as err:
-            logging.debug("\t\t Error getting certificate issuer: {}".format(err))
-
-        try:
-            if (constructed_chain and (len(constructed_chain) > 0)):
-                highest_constructed = parse_cert(constructed_chain[-1])
-                issuer = cert_issuer_name(highest_constructed)
+            try:
+                # TODO: served certs are not necessarily in order so may need to check order
+                highest_served = parse_cert(served_chain[-1])
+                issuer = cert_issuer_name(highest_served)
                 if issuer:
-                    data['certs']['constructed_issuer'] = issuer
+                    data['certs']['served_issuer'] = issuer
                 else:
-                    data['certs']['constructed_issuer'] = "(None constructed)"
-        except Exception as err:
-            logging.debug("\t\t Error getting certificate constructed issuer: {}".format(err))
+                    data['certs']['served_issuer'] = "(None found)"
+            except Exception as err:
+                logging.debug("\t\t Error getting certificate issuer: {}".format(err))
 
-        leaf = parse_cert(served_chain[0])
-        leaf_key = leaf.public_key()
+            try:
+                if (constructed_chain and (len(constructed_chain) > 0)):
+                    highest_constructed = parse_cert(constructed_chain[-1])
+                    issuer = cert_issuer_name(highest_constructed)
+                    if issuer:
+                        data['certs']['constructed_issuer'] = issuer
+                    else:
+                        data['certs']['constructed_issuer'] = "(None constructed)"
+            except Exception as err:
+                logging.debug("\t\t Error getting certificate constructed issuer: {}".format(err))
+        
+            leaf = parse_cert(served_chain[0])
+            leaf_key = leaf.public_key()
 
-        if hasattr(leaf_key, "key_size"):
-            data['certs']['key_length'] = leaf_key.key_size
-        elif hasattr(leaf_key, "curve"):
-            data['certs']['key_length'] = leaf_key.curve.key_size
-        else:
-            data['certs']['key_length'] = None
+            if hasattr(leaf_key, "key_size"):
+                data['certs']['key_length'] = leaf_key.key_size
+            elif hasattr(leaf_key, "curve"):
+                data['certs']['key_length'] = leaf_key.curve.key_size
+            else:
+                data['certs']['key_length'] = None
 
-        if(data['certs']['key_length'] < 2048):
-            data['certs']['certificate_less_than_2048'] = True
-        else:
-            data['certs']['certificate_less_than_2048'] = False
+            if(data['certs']['key_length'] < 2048):
+                data['certs']['certificate_less_than_2048'] = True
+            else:
+                data['certs']['certificate_less_than_2048'] = False
 
-        if isinstance(leaf_key, rsa.RSAPublicKey):
-            leaf_key_type = "RSA"
-        elif isinstance(leaf_key, dsa.DSAPublicKey):
-            leaf_key_type = "DSA"
-        elif isinstance(leaf_key, ec.EllipticCurvePublicKey):
-            leaf_key_type = "ECDSA"
-        else:
-            leaf_key_type == str(leaf_key.__class__)
+            if isinstance(leaf_key, rsa.RSAPublicKey):
+                leaf_key_type = "RSA"
+            elif isinstance(leaf_key, dsa.DSAPublicKey):
+                leaf_key_type = "DSA"
+            elif isinstance(leaf_key, ec.EllipticCurvePublicKey):
+                leaf_key_type = "ECDSA"
+            else:
+                leaf_key_type == str(leaf_key.__class__)
 
-        data['certs']['key_type'] = leaf_key_type
+            data['certs']['key_type'] = leaf_key_type
 
-        # Signature of the leaf certificate only.
-        data['certs']['leaf_signature'] = leaf.signature_hash_algorithm.name
+            # Signature of the leaf certificate only.
+            data['certs']['leaf_signature'] = leaf.signature_hash_algorithm.name
 
-        if(leaf.signature_hash_algorithm.name == "MD5"):
-            data['certs']['md5_signed_certificate'] = True
-        else:
-            data['certs']['md5_signed_certificate'] = False
+            if(leaf.signature_hash_algorithm.name == "MD5"):
+                data['certs']['md5_signed_certificate'] = True
+            else:
+                data['certs']['md5_signed_certificate'] = False
 
-        if(leaf.signature_hash_algorithm.name == "SHA1"):
-            data['certs']['sha1_signed_certificate'] = True
-        else:
-            data['certs']['sha1_signed_certificate'] = False
+            if(leaf.signature_hash_algorithm.name == "SHA1"):
+                data['certs']['sha1_signed_certificate'] = True
+            else:
+                data['certs']['sha1_signed_certificate'] = False
 
-        # Beginning and expiration dates of the leaf certificate
-        data['certs']['not_before'] = leaf.not_valid_before
-        data['certs']['not_after'] = leaf.not_valid_after
+            # Beginning and expiration dates of the leaf certificate
+            data['certs']['not_before'] = leaf.not_valid_before
+            data['certs']['not_after'] = leaf.not_valid_after
 
-        now = datetime.datetime.now()
-        if (now < leaf.not_valid_before) or (now > leaf.not_valid_after):
-            data['certs']['expired_certificate'] = True
-        else:
-            data['certs']['expired_certificate'] = False
+            now = datetime.datetime.now()
+            if (now < leaf.not_valid_before) or (now > leaf.not_valid_after):
+                data['certs']['expired_certificate'] = True
+            else:
+                data['certs']['expired_certificate'] = False
 
-        any_sha1_served = False
-        for cert in served_chain:
-            if parse_cert(cert).signature_hash_algorithm.name == "sha1":
-                any_sha1_served = True
+            any_sha1_served = False
+            for cert in served_chain:
+                if parse_cert(cert).signature_hash_algorithm.name == "sha1":
+                    any_sha1_served = True
 
-        data['certs']['any_sha1_served'] = any_sha1_served
+            data['certs']['any_sha1_served'] = any_sha1_served
 
-        if data['certs'].get('constructed_issuer'):
-            if "has_sha1_in_certificate_chain" in functions:
-                data['certs']['any_sha1_constructed'] = certs.has_sha1_in_certificate_chain
-            elif "verified_chain_has_sha1_signature" in functions:
-                data['certs']['any_sha1_constructed'] = certs.verified_chain_has_sha1_signature
+            if data['certs'].get('constructed_issuer'):
+                data['certs']['any_sha1_constructed'] = certificate_deployment.verified_chain_has_sha1_signature
 
-        extensions = leaf.extensions
-        oids = []
-        try:
-            ext = extensions.get_extension_for_class(cryptography.x509.extensions.CertificatePolicies)
-            policies = ext.value
-            for policy in policies:
-                oids.append(policy.policy_identifier.dotted_string)
-        except cryptography.x509.ExtensionNotFound:
-            # If not found, just move on.
-            pass
+            extensions = leaf.extensions
+            oids = []
+            try:
+                ext = extensions.get_extension_for_class(cryptography.x509.extensions.CertificatePolicies)
+                policies = ext.value
+                for policy in policies:
+                    oids.append(policy.policy_identifier.dotted_string)
+            except cryptography.x509.ExtensionNotFound:
+                # If not found, just move on.
+                pass
 
-        data['certs']['ev'] = {
-            'asserted': False,
-            'trusted': False,
-            'trusted_oids': [],
-            'trusted_browsers': []
-        }
+            data['certs']['ev'] = {
+                'asserted': False,
+                'trusted': False,
+                'trusted_oids': [],
+                'trusted_browsers': []
+            }
 
-        for oid in oids:
+            for oid in oids:
 
-            # If it matches the generic EV OID, the certifciate is
-            # asserting that it was issued following the EV guidelines.
-            data['certs']['ev']['asserted'] = (oid == evg_oid)
+                # If it matches the generic EV OID, the certifciate is
+                # asserting that it was issued following the EV guidelines.
+                data['certs']['ev']['asserted'] = (oid == evg_oid)
 
-            # Check which browsers for which the cert is marked as EV.
-            browsers = []
-            if oid in mozilla_ev:
-                browsers.append("Mozilla")
-            if oid in google_ev:
-                browsers.append("Google")
-            if oid in microsoft_ev:
-                browsers.append("Microsoft")
-            if oid in apple_ev:
-                browsers.append("Apple")
+                # Check which browsers for which the cert is marked as EV.
+                browsers = []
+                if oid in mozilla_ev:
+                    browsers.append("Mozilla")
+                if oid in google_ev:
+                    browsers.append("Google")
+                if oid in microsoft_ev:
+                    browsers.append("Microsoft")
+                if oid in apple_ev:
+                    browsers.append("Apple")
 
-            if len(browsers) > 0:
-                data['certs']['ev']['trusted'] = True
+                if len(browsers) > 0:
+                    data['certs']['ev']['trusted'] = True
 
-                # Log each new OID we observe as marked for EV.
-                if oid not in data['certs']['ev']['trusted_oids']:
-                    data['certs']['ev']['trusted_oids'].append(oid)
+                    # Log each new OID we observe as marked for EV.
+                    if oid not in data['certs']['ev']['trusted_oids']:
+                        data['certs']['ev']['trusted_oids'].append(oid)
 
-                # For all matching browsers, log each new one.
-                for browser in browsers:
-                    if browser not in data['certs']['ev']['trusted_browsers']:
-                        data['certs']['ev']['trusted_browsers'].append(browser)
+                    # For all matching browsers, log each new one.
+                    for browser in browsers:
+                        if browser not in data['certs']['ev']['trusted_browsers']:
+                            data['certs']['ev']['trusted_browsers'].append(browser)
 
-        # Is this cert issued by Symantec?
-        if "symantec_distrust_timeline" in functions:
-            distrust_timeline = certs.symantec_distrust_timeline
-            is_symantec_cert = (distrust_timeline is not None)
+            # Is this cert issued by Symantec?
+            is_symantec_cert = certificate_deployment.verified_chain_has_legacy_symantec_anchor
             data['certs']['is_symantec_cert'] = is_symantec_cert
             if is_symantec_cert:
-                data['certs']['symantec_distrust_date'] = distrust_timeline.name
+                # The distrust date is no longer passed down from when this
+                # test is originally run, so we have to repeat the test here
+                # to determine it.  It shouldn't get run that often.
+                try:
+                    distrust_timeline = _SymantecDistructTester.get_distrust_timeline(constructed_chain)
+                    data['certs']['symantec_distrust_date'] = distrust_timeline.name
+                except:
+                    data['certs']['symantec_distrust_date'] = "Unknown"
+                    pass
             else:
                 data['certs']['symantec_distrust_date'] = None
-        elif "verified_chain_has_legacy_symantec_anchor" in functions:
-            data['certs']['is_symantec_cert'] = certs.verified_chain_has_legacy_symantec_anchor
-        
+
     except Exception as err:
         logging.debug("\t\t Error analyzing certs: {}".format(err))
-
+    
     return data['certs']
 
 
@@ -650,7 +663,8 @@ def cert_issuer_name(parsed):
 
 # Analyze the results of a renegotiation test
 def analyze_reneg(data, reneg):
-    if (reneg.accepts_client_renegotiation is True) and (reneg.supports_secure_renegotiation is False):
+    accepts_client_renegotiation = reneg.is_vulnerable_to_client_renegotiation_dos
+    if (accepts_client_renegotiation is True) and (reneg.supports_secure_renegotiation is False):
         data['config']['insecure_renegotiation'] = True
     else:
         data['config']['insecure_renegotiation'] = False
@@ -660,38 +674,46 @@ def analyze_reneg(data, reneg):
 def supported_protocol(result):
     if result is None:
         return None
-    return (len(result.accepted_cipher_list) > 0)
+    # return (len(result.accepted_cipher_suites) > 0)
+    return result.is_tls_protocol_version_supported
 
 
 # SSlyze initialization boilerplate
 def init_sslyze(hostname, port, starttls_smtp, options, sync=False):
     global network_timeout, CA_FILE
 
+    server_info = None
     network_timeout = int(options.get("network_timeout", network_timeout))
     if options.get('ca_file'):
         CA_FILE = options['ca_file']
 
-    tls_wrapped_protocol = TlsWrappedProtocolEnum.PLAIN_TLS
     if starttls_smtp:
-        tls_wrapped_protocol = TlsWrappedProtocolEnum.STARTTLS_SMTP
-
+        tls_wrapped_protocol = ProtocolWithOpportunisticTlsEnum.SMTP
+        sslyze_configuration = ServerNetworkConfiguration(tls_server_name_indication = hostname, tls_opportunistic_encryption = tls_wrapped_protocol, network_timeout = network_timeout)
+    else:
+        sslyze_configuration = ServerNetworkConfiguration(tls_server_name_indication = hostname, network_timeout = network_timeout)
+            
+    
     try:
         # logging.debug("\tTesting connectivity with timeout of %is." % network_timeout)
-        server_tester = ServerConnectivityTester(hostname=hostname, port=port, tls_wrapped_protocol=tls_wrapped_protocol)
-        server_info = server_tester.perform(network_timeout=network_timeout)
-    except ServerConnectivityError:
+        server_location = ServerNetworkLocationViaDirectConnection.with_ip_address_lookup(hostname=hostname, port=port)
+        server_tester = ServerConnectivityTester()
+        server_info = server_tester.perform(server_location, sslyze_configuration)
+       
+    except ConnectionToServerFailed:
         # Usually pshtt has already established that we can connect to the site, so let's try again a couple of times
         try:
             logging.debug("\t{}:{} Server connectivity check failed. Trying again...".format(hostname, port))
             time.sleep(10)
-            server_tester = ServerConnectivityTester(hostname=hostname, port=port, tls_wrapped_protocol=tls_wrapped_protocol)
+            server_location = ServerNetworkLocationViaDirectConnection.with_ip_address_lookup(hostname=hostname, port=port)
+            server_tester = ServerConnectivityTester()
             server_info = server_tester.perform(network_timeout=(network_timeout*2))
         except Exception as err:
             try:
                 logging.debug("\t{}:{} Server connectivity check failed. Trying again...".format(hostname, port))
                 time.sleep(30)
-                server_tester = ServerConnectivityTester(hostname=hostname, port=port, tls_wrapped_protocol=tls_wrapped_protocol)
-                server_info = server_tester.perform(network_timeout=(network_timeout*2))
+                server_location = ServerNetworkLocationViaDirectConnection.with_ip_address_lookup(hostname=hostname, port=port)
+                server_tester = ServerConnectivityTester()
             except Exception as err:
                 logging.warning("\t{}:{} Server connectivity not established during test.".format(hostname, port))
                 return None, None
@@ -704,10 +726,7 @@ def init_sslyze(hostname, port, starttls_smtp, options, sync=False):
         logging.warning("\t{}:{} Unknown exception when performing server connectivity info.".format(hostname, port))
         return None, None
 
-    if sync:
-        scanner = SynchronousScanner(network_timeout=network_timeout)
-    else:
-        scanner = ConcurrentScanner(network_timeout=network_timeout)
+    scanner = Scanner()
 
     return server_info, scanner
 
@@ -716,79 +735,78 @@ def init_sslyze(hostname, port, starttls_smtp, options, sync=False):
 # Takes longer, but no multi-process funny business.
 def scan_serial(scanner, server_info, data, options):
     errors = 0
+    hostname = server_info.server_location.hostname
 
-    def run_scan(scan_type, command, errors, retry=True):
+    def run_scan(scan_type, command, errors, retry=True, command_extra_args=None):
         if(errors >= 2):
-            logging.warning("{}: Too many errors, aborting rest of scans.".format(server_info.hostname))
+            logging.warning("{}: Too many errors, aborting rest of scans.".format(hostname))
             return None, errors
-        logging.debug("\t\t{} {} scan.".format(server_info.hostname, scan_type))
+        logging.debug("\t\t{} scan.".format(scan_type))
         result = None
         try:
-            result = scanner.run_scan_command(server_info, command)
+            if command_extra_args:
+                scan_request = ServerScanRequest(server_info=server_info, scan_commands=[command], scan_commands_extra_arguments=command_extra_args)
+            else:
+                scan_request = ServerScanRequest(server_info=server_info, scan_commands=[command])
+            scanner.queue_scan(scan_request)
+            # Retrieve results from generator object
+            scan_results = [x for x in scanner.get_results()][0]
+            result = scan_results.scan_commands_results[command]
         except Exception as err:
             if retry and "timed out" in str(err):
-                logging.debug("\t\t{}: Timed out during {} scan.  Trying one more time...".format(server_info.hostname, scan_type))
+                logging.debug("\t\t{}: Timed out during {} scan.  Trying one more time...".format(hostname, scan_type))
                 time.sleep(10)
                 try:
-                    result = scanner.run_scan_command(server_info, command)
+                    scan_request = ServerScanRequest(server_info=server_info, scan_commands=[command], scan_commands_extra_arguments=command_extra_args)
+                    scanner.queue_scan(scan_request)
+                    # Retrieve results from generator object
+                    scan_results = [x for x in scanner.get_results()][0]
+                    result = scan_results.scan_commands_results[command]
                 except Exception as err2:
                     if retry and "timed out" in str(err2):
-                        logging.debug("\t\t{}: Timed out during {} scan.  Trying one more time...".format(server_info.hostname, scan_type))
+                        logging.debug("\t\t{}: Timed out during {} scan.  Trying one more time...".format(hostname, scan_type))
                         time.sleep(30)
                         try:
-                            result = scanner.run_scan_command(server_info, command)
+                            scan_request = ServerScanRequest(server_info=server_info, scan_commands=[command], scan_commands_extra_arguments=command_extra_args)
+                            scanner.queue_scan(scan_request)
+                            # Retrieve results from generator object
+                            scan_results = [x for x in scanner.get_results()][0]
+                            result = scan_results.scan_commands_results[command]
                         except Exception:
                             pass
             if not result:
-                logging.warning("\t\t{}: Error during {} scan.".format(server_info.hostname, scan_type))
-                logging.debug("\t\t{}: Exception during {} scan: {}".format(server_info.hostname, scan_type, err))
+                logging.warning("\t\t{}: Error during {} scan.".format(hostname, scan_type))
+                logging.debug("\t\t{}: Exception during {} scan: {}".format(hostname, scan_type, err))
                 errors = errors + 1
         return result, errors
 
-    logging.debug("\t{} Running scans in serial.".format(server_info.hostname))
-    sslv2, errors = run_scan("SSLv2", Sslv20ScanCommand(), errors)
-    sslv3, errors = run_scan("SSLv3", Sslv30ScanCommand(), errors)
-    tlsv1, errors = run_scan("TLSv1.0", Tlsv10ScanCommand(), errors)
-    tlsv1_1, errors = run_scan("TLSv1.1", Tlsv11ScanCommand(), errors)
-    tlsv1_2, errors = run_scan("TLSv1.2", Tlsv12ScanCommand(), errors)
-    tlsv1_3, errors = run_scan("TLSv1.3", Tlsv13ScanCommand(), errors)
+    logging.debug("\t{}: Running scans in serial.".format(hostname))
+    sslv2, errors = run_scan("SSLv2", ScanCommand.SSL_2_0_CIPHER_SUITES, errors)
+    sslv3, errors = run_scan("SSLv3", ScanCommand.SSL_3_0_CIPHER_SUITES, errors)
+    tlsv1, errors = run_scan("TLSv1.0", ScanCommand.TLS_1_0_CIPHER_SUITES, errors)
+    tlsv1_1, errors = run_scan("TLSv1.1", ScanCommand.TLS_1_1_CIPHER_SUITES, errors)
+    tlsv1_2, errors = run_scan("TLSv1.2", ScanCommand.TLS_1_2_CIPHER_SUITES, errors)
+    tlsv1_3, errors = run_scan("TLSv1.3", ScanCommand.TLS_1_3_CIPHER_SUITES, errors)
 
     certs = None
     if errors < 2 and options.get("sslyze_certs", True) is True:
-        try:
-            logging.debug("\t\t{} Certificate information scan.".format(server_info.hostname))
-            certs = scanner.run_scan_command(server_info, CertificateInfoScanCommand(ca_file=CA_FILE))
-        except idna.core.InvalidCodepoint:
-            logging.warning(utils.format_last_exception())
-            data['errors'].append("Invalid certificate/OCSP for this domain.")
-            certs = None
-        except Exception as err:
-            if "timed out" in str(err):
-                logging.debug("\t\t{}: Timed out during certificate information scan.  Trying one more time...".format(server_info.hostname))
-                time.sleep(10)
-                try:
-                    certs = scanner.run_scan_command(server_info, CertificateInfoScanCommand(ca_file=CA_FILE))
-                except Exception as err2:
-                    if "timed out" in str(err2):
-                        logging.debug("\t\t{}: Timed out during certificate information scan.  Trying one more time...".format(server_info.hostname))
-                        time.sleep(30)
-                        try:
-                            certs = scanner.run_scan_command(server_info, CertificateInfoScanCommand(ca_file=CA_FILE))
-                        except Exception:
-                            pass
-            if not certs:
-                logging.warning("{}: Error during certificate information scan.".format(server_info.hostname))
-                logging.debug("{}: Exception during certificate information scan: {}".format(server_info.hostname, err))
+        command = ScanCommand.CERTIFICATE_INFO
+        command_extra_args = None
+        if CA_FILE is not None:
+            command_extra_args = {
+                command: CertificateInfoExtraArguments(custom_ca_file=Path(CA_FILE))
+            }
+        certs, errors = run_scan("Certificate Info", ScanCommand.CERTIFICATE_INFO, errors, retry=True, command_extra_args=command_extra_args)
     else:
         certs = None
 
     reneg = None
     if options.get("sslyze_reneg", True) is True:
-        reneg, errors = run_scan("Renegotiation", SessionRenegotiationScanCommand(), errors, retry=False)
+        reneg, errors = run_scan("Renegotiation", ScanCommand.SESSION_RENEGOTIATION, errors, retry=False)
     else:
         reneg = None
 
-    logging.debug("\t{} Done scanning.".format(server_info.hostname))
+    logging.debug("\t{}: Done scanning.".format(hostname))
 
     return sslv2, sslv3, tlsv1, tlsv1_1, tlsv1_2, tlsv1_3, certs, reneg
 
@@ -796,82 +814,88 @@ def scan_serial(scanner, server_info, data, options):
 # Run each scan in parallel, using multi-processing.
 # Faster, but can generate many processes.
 def scan_parallel(scanner, server_info, data, options):
-    logging.debug("\t{} Running scans in parallel.".format(server_info.hostname))
+    hostname = server_info.server_location.hostname
+    logging.debug("\t{} Running scans in parallel.".format(hostname))
 
-    def queue(command):
+
+    def queue(command, extra_args=None):
         try:
-            return scanner.queue_scan_command(server_info, command)
-        except OSError:
-            text = ("OSError - likely too many processes and open files.")
-            data['errors'].append(text)
-            logging.warning("%s %s\n%s" % (server_info.hostname, text, utils.format_last_exception()))
-            return None, None, None, None, None, None, None
+            if extra_args:
+                scan_request = ServerScanRequest(server_info=server_info, scan_commands=[command], scan_commands_extra_arguments=extra_args)    
+            else:
+                scan_request = ServerScanRequest(server_info=server_info, scan_commands=[command])
+            scanner.queue_scan(scan_request)
         except Exception:
             text = ("Unknown exception queueing sslyze command.\n%s" % utils.format_last_exception())
             data['errors'].append(text)
-            logging.warning("%s %s" % (server_info.hostname, text))
+            logging.exception("%s %s" % (hostname, text))
             return None, None, None, None, None, None, None
 
     # Initialize commands and result containers
     sslv2, sslv3, tlsv1, tlsv1_1, tlsv1_2, tlsv1_3, certs, reneg = None, None, None, None, None, None, None, None
 
     # Queue them all up
-    queue(Sslv20ScanCommand())
-    queue(Sslv30ScanCommand())
-    queue(Tlsv10ScanCommand())
-    queue(Tlsv11ScanCommand())
-    queue(Tlsv12ScanCommand())
-    queue(Tlsv13ScanCommand())
+
+    queue(ScanCommand.SSL_2_0_CIPHER_SUITES)
+    queue(ScanCommand.SSL_3_0_CIPHER_SUITES)
+    queue(ScanCommand.TLS_1_0_CIPHER_SUITES)
+    queue(ScanCommand.TLS_1_1_CIPHER_SUITES)
+    queue(ScanCommand.TLS_1_2_CIPHER_SUITES)
+    queue(ScanCommand.TLS_1_3_CIPHER_SUITES)
 
     if options.get("sslyze-certs", True) is True:
-        queue(CertificateInfoScanCommand())
+        command = ScanCommand.CERTIFICATE_INFO
+        if CA_FILE is not None:
+            command_extra_args = { command: CertificateInfoExtraArguments(custom_ca_file=Path(CA_FILE)) }
+            queue(command, command_extra_args)
+        else:
+            queue(command)
 
     if options.get("sslyze-reneg", True) is True:
-        queue(CertificateInfoScanCommand())
-
+        queue(ScanCommand.SESSION_RENEGOTIATION)
+    
     # Reassign them back to predictable places after they're all done
     was_error = False
     for result in scanner.get_results():
         try:
-            if isinstance(result, PluginRaisedExceptionScanResult):
-                error = ("Scan command failed: %s" % result.as_text())
+            if ScanCommand.SSL_2_0_CIPHER_SUITES in result.scan_commands_results:
+                sslv2 = result.scan_commands_results[ScanCommand.SSL_2_0_CIPHER_SUITES]
+            if ScanCommand.SSL_3_0_CIPHER_SUITES in result.scan_commands_results:
+                sslv3 = result.scan_commands_results[ScanCommand.SSL_3_0_CIPHER_SUITES]
+            if ScanCommand.TLS_1_0_CIPHER_SUITES in result.scan_commands_results:
+                tlsv1 = result.scan_commands_results[ScanCommand.TLS_1_0_CIPHER_SUITES]
+            if ScanCommand.TLS_1_1_CIPHER_SUITES in result.scan_commands_results:
+                tlsv1_1 = result.scan_commands_results[ScanCommand.TLS_1_1_CIPHER_SUITES]
+            if ScanCommand.TLS_1_2_CIPHER_SUITES in result.scan_commands_results:
+                tlsv1_2 = result.scan_commands_results[ScanCommand.TLS_1_2_CIPHER_SUITES]
+            if ScanCommand.TLS_1_3_CIPHER_SUITES in result.scan_commands_results:
+                tlsv1_3 = result.scan_commands_results[ScanCommand.TLS_1_3_CIPHER_SUITES]
+            if ScanCommand.CERTIFICATE_INFO in result.scan_commands_results:
+                certs = result.scan_commands_results[ScanCommand.CERTIFICATE_INFO]
+            if ScanCommand.SESSION_RENEGOTIATION in result.scan_commands_results:
+                reneg = result.scan_commands_results[ScanCommand.SESSION_RENEGOTIATION]
+            
+            for scan_command, error in result.scan_commands_errors.items():
+                error = ("Scan command failed: %s" % scan_command)
                 logging.warning(error)
                 data['errors'].append(error)
-                return None, None, None, None, None, None, None
-
-            if type(result.scan_command) == Sslv20ScanCommand:
-                sslv2 = result
-            elif type(result.scan_command) == Sslv30ScanCommand:
-                sslv3 = result
-            elif type(result.scan_command) == Tlsv10ScanCommand:
-                tlsv1 = result
-            elif type(result.scan_command) == Tlsv11ScanCommand:
-                tlsv1_1 = result
-            elif type(result.scan_command) == Tlsv12ScanCommand:
-                tlsv1_2 = result
-            elif type(result.scan_command) == Tlsv13ScanCommand:
-                tlsv1_3 = result
-            elif type(result.scan_command) == CertificateInfoScanCommand:
-                certs = result
-            elif type(result.scan_command) == SessionRenegotiationScanCommand:
-                reneg = result
-            else:
-                error = "Couldn't match scan result with command! %s" % result
-                logging.warning("\t%s" % error)
-                data['errors'].append(error)
-                was_error = True
+                # return partial data even if errors
+                #return None, None, None, None, None, None, None, None
 
         except Exception:
             was_error = True
             text = ("Exception inside async scanner result processing.\n%s" % utils.format_last_exception())
             data['errors'].append(text)
-            logging.warning("\t%s" % text)
+            logging.exception("\t%s" % text)
+            # return partial data even if errors
 
     # There was an error during async processing.
     if was_error:
-        return None, None, None, None, None, None, None, None
+        # return partial data even if errors
+        #return None, None, None, None, None, None, None, None
+        pass
 
-    logging.debug("\t{} Done scanning.".format(server_info.hostname))
+    logging.debug("\t{}: Done scanning.".format(hostname))
 
     return sslv2, sslv3, tlsv1, tlsv1_1, tlsv1_2, tlsv1_3, certs, reneg
 
@@ -1097,4 +1121,3 @@ apple_ev = [
     "2.16.840.1.114414.1.7.23.3",
     "2.16.840.1.114414.1.7.24.3"
 ]
-

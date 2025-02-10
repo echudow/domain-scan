@@ -17,8 +17,8 @@ import codecs
 from itertools import chain
 from urllib.error import URLError
 
-# import publicsuffix # deprecated
 from publicsuffixlist.compat import PublicSuffixList
+from publicsuffixlist.update import updatePSL
 from utils.scan_utils import options as options_for_scan
 # global in-memory cache
 suffix_list = None
@@ -499,7 +499,7 @@ def base_domain_for(subdomain, cache_dir="./cache"):
     If suffix_list is None, the caches have not been initialized, so do that.
     """
     if suffix_list is None:
-        suffix_list, discard = load_suffix_list(cache_dir=cache_dir)
+        suffix_list = load_suffix_list(cache_dir=cache_dir)
 
     if suffix_list is None:
         logging.warning("Error downloading the PSL.")
@@ -508,26 +508,29 @@ def base_domain_for(subdomain, cache_dir="./cache"):
     return suffix_list.get_public_suffix(subdomain)
 
 
-# Returns an instantiated PublicSuffixList object, and the
-# list of lines read from the file.
+# Returns an instantiated PublicSuffixList object.
 def load_suffix_list(cache_dir="./cache"):
 
-    logging.debug("Using cached Public Suffix List...")
-    suffixes = PublicSuffixList()
+    cached_psl = cache_single("public-suffix-list.txt", cache_dir=cache_dir)
+
+    # make sure the cache directory is present
+    mkdir_p(os.path.dirname(cached_psl))
 
     # File does not exist, download current list and cache it at given location.
-    # logging.debug("Downloading the Public Suffix List...")
-    #    try:
-    #        # cache_file = publicsuffix.fetch() # broken
-    #        from publicsuffixlist.update import updatePSL
-    #        updatePSL()
-    #    except URLError as err:
-    #        logging.warning("Unable to download the Public Suffix List...")
-    #        logging.debug("{}".format(err))
-    #        return None, None
-    #    suffixes = PublicSuffixList()
+    if not os.path.exists(cached_psl):
+        logging.debug("Downloading the Public Suffix List...")
+        try:
+            updatePSL(cached_psl)
+        except Exception as err:
+            logging.warning("Unable to download the Public Suffix List...")
+            logging.debug("{}".format(err))
+            return None
 
-    return suffixes, None
+        logging.debug("Using cached Public Suffix List...")
+    with codecs.open(cached_psl, encoding='utf-8') as psl_file:
+        suffixes = PublicSuffixList(psl_file)
+
+    return suffixes
 
 
 # Check whether we have HTTP behavior data cached for a domain.
@@ -731,6 +734,5 @@ def suffix_pattern(suffixes):
     return re.compile("(?:%s)$" % center)
 
 
-def flatten(l):
-    return list(chain.from_iterable(l))
-
+def flatten(iterable):
+    return list(chain.from_iterable(iterable))

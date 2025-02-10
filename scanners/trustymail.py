@@ -24,6 +24,7 @@ default_smtp_ports = '25,465,587'
 # Advertise lambda support
 lambda_support = True
 
+
 # Initialize dnssec checks once, at the top of the scan.
 def init(environment, options):
     try:
@@ -185,14 +186,13 @@ def scan(domain, environment, options):
         scan_types['mx'] = True
         scan_types['starttls'] = False
 
-    
     # Monkey patching trustymail to make it cache the PSL where we
     # want
     trustymail.PublicSuffixListFilename = 'cache/public-suffix-list.txt'
     if environment['scan_method'] == 'lambda':
         # Monkey patching trustymail to make the PSL cache read-only
         trustymail.PublicSuffixListReadOnly = True
-
+    
     data = tmail.scan(domain, timeout, smtp_timeout, smtp_localhost,
                       smtp_ports, smtp_cache, scan_types,
                       dns_hostnames)
@@ -333,6 +333,6 @@ headers = [
     "DMARC Aggregate Report URIs", "DMARC Forensic Report URIs",
     "DMARC Has Aggregate Report URI", "DMARC Has Forensic Report URI",
     "DMARC Reporting Address Acceptance Error", "SPF Number of IPs",
-    "MX TLSA Record", "MX TLSA DNSSEC", "MX TLSA Valid", "MX TLSA Matches STARTTLS",
+     "MX TLSA Record", "MX TLSA DNSSEC", "MX TLSA Valid", "MX TLSA Matches STARTTLS",
     "Syntax Errors", "Debug Info"
 ]
