@@ -15,6 +15,7 @@ from pathlib import Path
 from concurrent.futures import ThreadPoolExecutor
 from typing import Any, List, Tuple
 from types import ModuleType
+import threading
 
 from scanners.headless.local_bridge import headless_scan
 from utils import FAST_CACHE_KEY, scan_utils
@@ -269,11 +270,14 @@ def copy_environment(env: dict) -> dict:
 
     return env_copy
 
+WRITE_LOCK = threading.RLock()
 
 ###
 # Core scan method for scanners. (Run once in each worker.)
 def perform_scan(params: Tuple[Any, str, dict, dict, dict]):
     scanner, domain, handles, environment, options = params
+
+    global WRITE_LOCK
 
     # If the scanner needs to add extra variables in the way that used to be
     # handled by init_domain, it now needs to deal with those in its __init__
@@ -343,6 +347,8 @@ def perform_scan(params: Tuple[Any, str, dict, dict, dict]):
 
             # Convert to rows for CSV.
             rows = scanner.to_rows(data)
+            for row in rows:
+                logging.debug("CSV_OUTPUT: %s,%s",domain,row)
         else:
             scan_utils.write(scan_utils.invalid(), domain_cache)
             meta['errors'].append("Scan returned nothing.")
@@ -361,9 +367,11 @@ def perform_scan(params: Tuple[Any, str, dict, dict, dict]):
         if not options.get("meta", False):
             meta = {}
 
+        WRITE_LOCK.acquire()
         scan_utils.write_rows(
             rows, domain, scan_utils.base_domain_for(domain, cache_dir=cache_dir),
             scanner, handles[name]['writer'], meta=meta)
+        WRITE_LOCK.release()
     except:
         logging.warning(scan_utils.format_last_exception())
 

@@ -34,6 +34,7 @@ from sslyze import (  # type: ignore
     ServerNetworkLocationViaDirectConnection,
     ServerNetworkConfiguration,
     ServerScanRequest,
+    ProtocolWithOpportunisticTlsEnum,
 )
 from sslyze.errors import ConnectionToServerFailed  # type: ignore
 from sslyze.plugins.certificate_info.implementation import (  # type: ignore
